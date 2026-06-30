@@ -26,6 +26,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          # Public PKCE client id (also visible in the shipped bundle); set as a repo variable.
+          VITE_SPOTIFY_CLIENT_ID: ${{ vars.VITE_SPOTIFY_CLIENT_ID }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
