@@ -68,10 +68,11 @@ describe('backup', () => {
     expect((await db.edges.get('e'))?.tags).toEqual([])
   })
 
-  it('BACKUP_TABLES matches the live schema (minus local-only snapshots)', () => {
+  it('BACKUP_TABLES matches the live schema (minus local-only tables)', () => {
+    const localOnly = new Set(['snapshots', 'meta'])
     const live = db.tables
       .map((t) => t.name)
-      .filter((n) => n !== 'snapshots')
+      .filter((n) => !localOnly.has(n))
       .sort()
     expect([...BACKUP_TABLES].sort()).toEqual(live)
   })

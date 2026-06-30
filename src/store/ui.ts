@@ -24,6 +24,9 @@ function loadViewMode(): ViewMode {
   return 'list'
 }
 
+// Auto-backup-to-file state. 'unsupported' = browser has no File System Access API.
+export type BackupStatus = 'unsupported' | 'off' | 'on' | 'needs-permission'
+
 interface UiState {
   collection: Collection
   viewMode: ViewMode
@@ -32,12 +35,20 @@ interface UiState {
   search: string
   spotifyConnected: boolean
 
+  backupStatus: BackupStatus
+  backupFileName: string | null
+  unsavedChanges: number // changes since the last successful backup/export
+  lastBackupAt: number | null
+
   setCollection: (c: Collection) => void
   setViewMode: (m: ViewMode) => void
   selectTrack: (id: string | null) => void
   setFocusTrack: (id: string | null) => void
   setSearch: (q: string) => void
   setSpotifyConnected: (connected: boolean) => void
+  setBackup: (status: BackupStatus, fileName?: string | null) => void
+  bumpUnsaved: () => void
+  markBackedUp: (at: number) => void
 }
 
 export const useUi = create<UiState>((set) => ({
@@ -47,6 +58,11 @@ export const useUi = create<UiState>((set) => ({
   focusTrackId: null,
   search: '',
   spotifyConnected: false,
+
+  backupStatus: 'off',
+  backupFileName: null,
+  unsavedChanges: 0,
+  lastBackupAt: null,
 
   setCollection: (collection) => set({ collection }),
   setViewMode: (viewMode) => {
@@ -61,4 +77,8 @@ export const useUi = create<UiState>((set) => ({
   setFocusTrack: (id) => set({ focusTrackId: id }),
   setSearch: (q) => set({ search: q }),
   setSpotifyConnected: (connected) => set({ spotifyConnected: connected }),
+  setBackup: (backupStatus, fileName) =>
+    set(fileName === undefined ? { backupStatus } : { backupStatus, backupFileName: fileName }),
+  bumpUnsaved: () => set((s) => ({ unsavedChanges: s.unsavedChanges + 1 })),
+  markBackedUp: (at) => set({ unsavedChanges: 0, lastBackupAt: at }),
 }))

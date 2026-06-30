@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useUi } from './store/ui'
 import { seedIfEmpty } from './db/seed'
 import {
@@ -8,21 +8,23 @@ import {
   spotifyLogin,
   spotifyLogout,
 } from './lib/spotify'
-import { exportData, importData } from './lib/backup'
+import { exportData } from './lib/backup'
 import { requestPersistentStorage } from './lib/storage'
-import { autoSnapshot, takeSnapshot } from './lib/snapshots'
+import { autoSnapshot } from './lib/snapshots'
+import { initAutoBackup, noteManualBackup } from './lib/autobackup'
 import { Sidebar } from './components/Sidebar'
 import { CollectionView } from './components/CollectionView'
 import { TrackInspector } from './components/track/TrackInspector'
-import { SnapshotsModal } from './components/SnapshotsModal'
+import { BackupModal } from './components/BackupModal'
 
 const NUDGE_KEY = 'dj-secretary.storageNudgeDismissed'
 
 function App() {
   const spotifyConnected = useUi((s) => s.spotifyConnected)
   const setSpotifyConnected = useUi((s) => s.setSpotifyConnected)
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [snapshotsOpen, setSnapshotsOpen] = useState(false)
+  const backupStatus = useUi((s) => s.backupStatus)
+  const unsavedChanges = useUi((s) => s.unsavedChanges)
+  const [backupOpen, setBackupOpen] = useState(false)
   const [showStorageNudge, setShowStorageNudge] = useState(false)
 
   useEffect(() => {
@@ -30,12 +32,10 @@ function App() {
       await spotifyHandleRedirect()
       setSpotifyConnected(isSpotifyConnected())
       await seedIfEmpty()
-      // Recovery point for this session, then ask the browser not to evict us.
       await autoSnapshot('startup')
+      await initAutoBackup()
       const persisted = await requestPersistentStorage()
-      if (!persisted && localStorage.getItem(NUDGE_KEY) !== '1') {
-        setShowStorageNudge(true)
-      }
+      if (!persisted && localStorage.getItem(NUDGE_KEY) !== '1') setShowStorageNudge(true)
     })()
   }, [setSpotifyConnected])
 
@@ -46,17 +46,6 @@ function App() {
       /* ignore */
     }
     setShowStorageNudge(false)
-  }
-
-  const onImport = async (file: File) => {
-    if (!confirm('Importing replaces your entire current library. Continue?')) return
-    try {
-      await takeSnapshot('before import') // so an import is undoable from Snapshots
-      await importData(file)
-      alert('Backup imported.')
-    } catch (e) {
-      alert(`Import failed: ${e instanceof Error ? e.message : 'unknown error'}`)
-    }
   }
 
   return (
@@ -88,45 +77,45 @@ function App() {
                 Connect Spotify
               </button>
             ))}
+
+          {/* Backup status hint */}
+          {backupStatus === 'on' && unsavedChanges === 0 ? (
+            <span className="text-xs text-emerald-300/70">Backed up ✓</span>
+          ) : backupStatus === 'needs-permission' ? (
+            <button className="text-xs text-amber-300 hover:text-amber-100" onClick={() => setBackupOpen(true)}>
+              Resume backup
+            </button>
+          ) : unsavedChanges > 0 && backupStatus !== 'on' ? (
+            <button className="text-xs text-amber-400 hover:text-amber-200" onClick={() => setBackupOpen(true)}>
+              ● {unsavedChanges} unsaved
+            </button>
+          ) : null}
+
           <button
-            className="rounded-md px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-panel2"
-            onClick={() => setSnapshotsOpen(true)}
+            className="rounded-md border border-edge bg-panel2 px-2.5 py-1.5 text-xs text-zinc-200 hover:bg-edge"
+            onClick={() => setBackupOpen(true)}
           >
-            Snapshots
+            Backup
           </button>
-          <button
-            className="rounded-md px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-panel2"
-            onClick={() => void exportData()}
-          >
-            Export
-          </button>
-          <button
-            className="rounded-md px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-panel2"
-            onClick={() => fileInput.current?.click()}
-          >
-            Import
-          </button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept="application/json"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) void onImport(f)
-              e.target.value = ''
-            }}
-          />
         </div>
       </header>
 
       {showStorageNudge && (
         <div className="flex items-center gap-3 border-b border-amber-900/50 bg-amber-950/40 px-4 py-2 text-xs text-amber-200">
           <span>
-            Your browser hasn't granted persistent storage, so it could evict your library under disk
-            pressure. Keep a backup with <span className="font-medium">Export</span> (or install the app).
+            Your browser hasn't granted persistent storage, so it could evict your library. Set up auto-backup or keep an
+            export — open <span className="font-medium">Backup</span>.
           </span>
-          <button className="ml-auto rounded px-2 py-1 text-amber-100 hover:bg-amber-900/40" onClick={() => void exportData()}>
+          <button className="ml-auto rounded px-2 py-1 text-amber-100 hover:bg-amber-900/40" onClick={() => setBackupOpen(true)}>
+            Open Backup
+          </button>
+          <button
+            className="rounded px-2 py-1 text-amber-100 hover:bg-amber-900/40"
+            onClick={() => {
+              void exportData()
+              noteManualBackup()
+            }}
+          >
             Export now
           </button>
           <button className="rounded px-2 py-1 text-amber-300/80 hover:text-amber-100" onClick={dismissNudge}>
@@ -143,7 +132,7 @@ function App() {
       </div>
 
       <TrackInspector />
-      <SnapshotsModal open={snapshotsOpen} onClose={() => setSnapshotsOpen(false)} />
+      <BackupModal open={backupOpen} onClose={() => setBackupOpen(false)} />
     </div>
   )
 }

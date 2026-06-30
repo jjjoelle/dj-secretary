@@ -1,6 +1,6 @@
 import Dexie from 'dexie'
 import type { Table } from 'dexie'
-import type { Track, Annotation, Edge, Playlist, TrackSet, Snapshot } from '../types'
+import type { Track, Annotation, Edge, Playlist, TrackSet, Snapshot, Meta } from '../types'
 
 // Local-first storage. Everything lives in the browser (IndexedDB); no backend.
 export class DjDb extends Dexie {
@@ -10,6 +10,7 @@ export class DjDb extends Dexie {
   playlists!: Table<Playlist, string>
   sets!: Table<TrackSet, string>
   snapshots!: Table<Snapshot, string>
+  meta!: Table<Meta, string>
 
   constructor() {
     super('dj-secretary')
@@ -34,10 +35,33 @@ export class DjDb extends Dexie {
             if (!Array.isArray(e.tags)) e.tags = []
           })
       })
+    // v4 adds a small key/value store (auto-backup file handle, etc.).
+    this.version(4).stores({ meta: 'key' })
   }
 }
 
 export const db = new DjDb()
+
+// Fire listeners on any write to the main tables (auto-backup uses this to know
+// the library changed). Hooks are registered once, here at module load, so they
+// don't depend on any component/init having run.
+type DbChangeListener = () => void
+const dbChangeListeners = new Set<DbChangeListener>()
+export function onDbChange(fn: DbChangeListener): () => void {
+  dbChangeListeners.add(fn)
+  return () => {
+    dbChangeListeners.delete(fn)
+  }
+}
+function emitDbChange(): void {
+  dbChangeListeners.forEach((fn) => fn())
+}
+;[db.tracks, db.annotations, db.edges, db.playlists, db.sets].forEach((table) => {
+  const t = table as unknown as { hook: (ev: 'creating' | 'updating' | 'deleting', fn: () => void) => void }
+  t.hook('creating', emitDbChange)
+  t.hook('updating', emitDbChange)
+  t.hook('deleting', emitDbChange)
+})
 
 export function newId(): string {
   return crypto.randomUUID()
@@ -168,4 +192,18 @@ export async function updateSet(id: string, changes: Partial<TrackSet>): Promise
 
 export async function deleteSet(id: string): Promise<void> {
   await db.sets.delete(id)
+}
+
+// ---- Meta (key/value app settings) ----
+
+export async function metaGet<T = unknown>(key: string): Promise<T | undefined> {
+  return (await db.meta.get(key))?.value as T | undefined
+}
+
+export async function metaSet(key: string, value: unknown): Promise<void> {
+  await db.meta.put({ key, value })
+}
+
+export async function metaDelete(key: string): Promise<void> {
+  await db.meta.delete(key)
 }

@@ -64,6 +64,12 @@ export interface Playlist {
   createdAt: number
 }
 
+// Small key/value store for app-local settings (e.g. the auto-backup file handle).
+export interface Meta {
+  key: string
+  value: unknown
+}
+
 // A local recovery snapshot: a full-DB JSON blob, ring-buffered. Local only —
 // NOT part of the portable JSON backup.
 export interface Snapshot {
