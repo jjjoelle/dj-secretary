@@ -18,6 +18,7 @@ import type { Edge, Track } from '../../types'
 import { useUi } from '../../store/ui'
 import { allEdgeTags } from '../../lib/edges'
 import { TrackNode } from './TrackNode'
+import { EdgeEditModal } from './EdgeEditModal'
 
 const nodeTypes: NodeTypes = { track: TrackNode }
 const PRO_OPTIONS = { hideAttribution: true }
@@ -88,6 +89,7 @@ function GraphCanvas({ trackIds }: { trackIds?: string[] }) {
   const selectedTrackId = useUi((s) => s.selectedTrackId)
   const [focusMode, setFocusMode] = useState(false)
   const [edgeTag, setEdgeTag] = useState<string | null>(null)
+  const [editEdgeId, setEditEdgeId] = useState<string | null>(null)
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState<FlowEdge>([])
@@ -183,6 +185,10 @@ function GraphCanvas({ trackIds }: { trackIds?: string[] }) {
     void updateTrack(node.id, { position: node.position })
   }, [])
 
+  const onEdgeClick = useCallback((_evt: unknown, edge: { id: string }) => {
+    setEditEdgeId(edge.id)
+  }, [])
+
   const onConnect = useCallback((c: Connection) => {
     if (c.source && c.target && c.source !== c.target) {
       void addEdge({ fromTrackId: c.source, toTrackId: c.target })
@@ -207,6 +213,7 @@ function GraphCanvas({ trackIds }: { trackIds?: string[] }) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
+        onEdgeClick={onEdgeClick}
         onNodeDragStop={onNodeDragStop}
         onConnect={onConnect}
         nodeTypes={nodeTypes}
@@ -253,7 +260,7 @@ function GraphCanvas({ trackIds }: { trackIds?: string[] }) {
         <p className="pointer-events-none max-w-[15rem] text-[11px] leading-snug text-zinc-500">
           {focusMode
             ? 'Click a neighbor to re-center. Outgoing transitions sit below, incoming above.'
-            : 'Click a node to inspect it. Drag a handle between nodes to add a transition.'}
+            : 'Click a node to inspect, or an edge to edit it. Drag between nodes to add a transition.'}
         </p>
       </div>
 
@@ -262,6 +269,8 @@ function GraphCanvas({ trackIds }: { trackIds?: string[] }) {
           No tracks in this view.
         </div>
       )}
+
+      {editEdgeId && <EdgeEditModal edgeId={editEdgeId} onClose={() => setEditEdgeId(null)} />}
     </div>
   )
 }

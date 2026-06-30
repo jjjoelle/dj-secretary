@@ -6,7 +6,6 @@ import {
   isSpotifyConnected,
   spotifyHandleRedirect,
   spotifyLogin,
-  spotifyLogout,
 } from './lib/spotify'
 import { exportData } from './lib/backup'
 import { requestPersistentStorage } from './lib/storage'
@@ -22,6 +21,7 @@ const NUDGE_KEY = 'dj-secretary.storageNudgeDismissed'
 function App() {
   const spotifyConnected = useUi((s) => s.spotifyConnected)
   const setSpotifyConnected = useUi((s) => s.setSpotifyConnected)
+  const setCollection = useUi((s) => s.setCollection)
   const backupStatus = useUi((s) => s.backupStatus)
   const unsavedChanges = useUi((s) => s.unsavedChanges)
   const [backupOpen, setBackupOpen] = useState(false)
@@ -61,11 +61,8 @@ function App() {
             (spotifyConnected ? (
               <button
                 className="rounded-md px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-panel2"
-                title="Disconnect Spotify"
-                onClick={() => {
-                  spotifyLogout()
-                  setSpotifyConnected(false)
-                }}
+                title="Open My Spotify"
+                onClick={() => setCollection({ kind: 'spotify' })}
               >
                 Spotify ✓
               </button>

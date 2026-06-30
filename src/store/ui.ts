@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ViewMode = 'list' | 'grid' | 'graph'
+export type ViewMode = 'list' | 'grid' | 'graph' | 'linear'
 
 // What the main area is currently showing.
 export type Collection =
@@ -11,13 +11,14 @@ export type Collection =
   | { kind: 'playlist'; id: string }
   | { kind: 'set'; id: string }
   | { kind: 'transitions' }
+  | { kind: 'spotify' }
 
 const VIEW_MODE_KEY = 'dj-secretary.viewMode'
 
 function loadViewMode(): ViewMode {
   try {
     const v = localStorage.getItem(VIEW_MODE_KEY)
-    if (v === 'list' || v === 'grid' || v === 'graph') return v
+    if (v === 'list' || v === 'grid' || v === 'graph' || v === 'linear') return v
   } catch {
     /* ignore */
   }

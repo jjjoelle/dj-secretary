@@ -7,13 +7,16 @@ import type { ViewMode } from '../store/ui'
 import { TrackTable } from './library/TrackTable'
 import { TrackGrid } from './library/TrackGrid'
 import { OrderedList } from './library/OrderedList'
+import { LinearView } from './library/LinearView'
 import { GraphView } from './graph/GraphView'
 import { TransitionsList } from './TransitionsList'
+import { SpotifyPage } from './spotify/SpotifyPage'
 import { AddTrackModal } from './library/AddTrackModal'
 import { btn, inputCls } from './common/widgets'
 
 const VIEW_MODES: { mode: ViewMode; label: string }[] = [
   { mode: 'list', label: 'List' },
+  { mode: 'linear', label: 'Linear' },
   { mode: 'grid', label: 'Grid' },
   { mode: 'graph', label: 'Graph' },
 ]
@@ -126,8 +129,9 @@ export function CollectionView() {
 
   const missingRecord = ordered && !record
 
-  // The Transitions view is its own thing (edges, not tracks).
+  // The Transitions view and My Spotify page are their own things (not track collections).
   if (collection.kind === 'transitions') return <TransitionsList />
+  if (collection.kind === 'spotify') return <SpotifyPage />
 
   return (
     <div className="flex h-full flex-col">
@@ -236,6 +240,9 @@ export function CollectionView() {
               ) : (
                 <TrackGrid tracks={displayTracks} annCount={annCount} edgeCount={edgeCount} onCardClick={selectTrack} />
               ))}
+            {viewMode === 'linear' && (
+              <LinearView tracks={displayTracks} edges={edges ?? []} onRowClick={selectTrack} />
+            )}
           </div>
         )}
       </div>
