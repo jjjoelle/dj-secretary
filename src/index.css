@@ -1,0 +1,44 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+@theme {
+  --color-ink: #0b0b0d;
+  --color-panel: #151518;
+  --color-panel2: #1c1c21;
+  --color-edge: #2a2a31;
+  --color-accent: #a855f7;
+  --color-accent2: #7c3aed;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: #e7e7ea;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a42 transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3a3a42;
+  border-radius: 9999px;
+}
+
+/* Keep React Flow surface consistent with the app background */
+.react-flow {
+  background: var(--color-ink);
+}
