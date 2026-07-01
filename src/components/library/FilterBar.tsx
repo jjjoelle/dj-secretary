@@ -11,13 +11,16 @@ export function FilterBar({
   onChange,
   tracks,
   rightSlot,
+  label = 'Filter',
 }: {
   query: FilterQuery
   onChange: (q: FilterQuery) => void
   tracks: Track[]
   rightSlot?: React.ReactNode // e.g. a "Save as crate" button
+  label?: string // 'Filter' normally, 'Rule' inside a smart crate
 }) {
   const [open, setOpen] = useState(false)
+  const isRule = label === 'Rule'
 
   const opts = useMemo(() => deriveOptions(tracks), [tracks])
   const mode: TagMode = query.tagMode ?? 'all'
@@ -33,7 +36,7 @@ export function FilterBar({
     <div className="border-b border-edge px-4 py-2">
       {/* Row 1: label, active summary chips, expand toggle, right slot, clear. */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-[11px] uppercase tracking-wide text-zinc-500">Filter</span>
+        <span className="mr-1 text-[11px] uppercase tracking-wide text-zinc-500">{label}</span>
         {chips.map((c) => (
           <button
             key={c.label}
@@ -51,7 +54,7 @@ export function FilterBar({
             open ? 'bg-panel2 text-zinc-200' : 'text-zinc-400 hover:bg-panel2'
           }`}
         >
-          {open ? '− Filters' : '+ Filter'}
+          {open ? (isRule ? 'Done' : '− Filters') : isRule ? 'Edit rule' : '+ Filter'}
         </button>
         <div className="ml-auto flex items-center gap-2">
           {rightSlot}

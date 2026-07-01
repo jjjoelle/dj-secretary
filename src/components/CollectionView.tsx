@@ -247,9 +247,20 @@ export function CollectionView() {
         ) : (
           <h1 className="text-base font-semibold text-zinc-100">{title}</h1>
         )}
+        {collection.kind === 'crate' && (
+          <span
+            className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-200"
+            title="A smart crate is a saved filter — it updates automatically as your library grows"
+          >
+            Smart crate
+          </span>
+        )}
         <span className="text-xs text-zinc-500">
-          {filterActive ? `${displayTracks.length} of ` : ''}
-          {ordered ? orderedIds.length : listTracks.length} tracks
+          {collection.kind === 'crate'
+            ? displayTracks.length === tagged.length
+              ? `${tagged.length} tracks`
+              : `${displayTracks.length} of ${tagged.length} tracks`
+            : `${filterActive ? `${displayTracks.length} of ` : ''}${ordered ? orderedIds.length : listTracks.length} tracks`}
         </span>
 
         <div className="ml-auto flex items-center gap-2">
@@ -296,7 +307,13 @@ export function CollectionView() {
       </div>
 
       {listTracks.length > 0 && (
-        <FilterBar query={query} onChange={setQuery} tracks={listTracks} rightSlot={filterRightSlot} />
+        <FilterBar
+          query={query}
+          onChange={setQuery}
+          tracks={listTracks}
+          rightSlot={filterRightSlot}
+          label={collection.kind === 'crate' ? 'Rule' : 'Filter'}
+        />
       )}
 
       <div className="min-h-0 flex-1">
