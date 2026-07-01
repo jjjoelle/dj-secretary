@@ -8,6 +8,8 @@ import {
   updatePlaylist,
   createSet,
   updateSet,
+  createFolder,
+  deleteFolder,
   deleteTrack,
 } from './db'
 
@@ -18,6 +20,8 @@ beforeEach(async () => {
     db.edges.clear(),
     db.playlists.clear(),
     db.sets.clear(),
+    db.smartCrates.clear(),
+    db.folders.clear(),
   ])
 })
 
@@ -41,5 +45,23 @@ describe('deleteTrack cascade', () => {
     expect((await db.playlists.get(pl))?.trackIds).toEqual([b])
     expect((await db.sets.get(st))?.trackIds).toEqual([b])
     expect(await db.tracks.get(b)).toBeDefined()
+  })
+})
+
+describe('deleteFolder', () => {
+  it('re-parents its playlists and sets to the top level, then removes the folder', async () => {
+    const fp = await createFolder('Warmups', 'playlist')
+    const fs = await createFolder('Closers', 'set')
+    const pl = await createPlaylist('PL')
+    await updatePlaylist(pl, { folderId: fp })
+    const st = await createSet('S')
+    await updateSet(st, { folderId: fs })
+
+    await deleteFolder(fp)
+
+    expect(await db.folders.get(fp)).toBeUndefined()
+    expect((await db.playlists.get(pl))?.folderId).toBeUndefined() // re-parented to top level
+    expect((await db.sets.get(st))?.folderId).toBe(fs) // other-kind folder untouched
+    expect(await db.folders.get(fs)).toBeDefined()
   })
 })

@@ -10,6 +10,7 @@ export type Collection =
   | { kind: 'tag'; value: string }
   | { kind: 'playlist'; id: string }
   | { kind: 'set'; id: string }
+  | { kind: 'crate'; id: string }
   | { kind: 'transitions' }
   | { kind: 'spotify' }
 

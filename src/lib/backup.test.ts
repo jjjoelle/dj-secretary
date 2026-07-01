@@ -8,6 +8,8 @@ import {
   updatePlaylist,
   createSet,
   updateSet,
+  createSmartCrate,
+  createFolder,
 } from '../db/db'
 import { gatherBackup, applyBackup, BACKUP_TABLES, type BackupData } from './backup'
 
@@ -18,6 +20,8 @@ async function clearAll() {
     db.edges.clear(),
     db.playlists.clear(),
     db.sets.clear(),
+    db.smartCrates.clear(),
+    db.folders.clear(),
     db.snapshots.clear(),
   ])
 }
@@ -25,18 +29,22 @@ async function clearAll() {
 beforeEach(clearAll)
 
 describe('backup', () => {
-  it('round-trips every table including sets and edge tags', async () => {
+  it('round-trips every table including sets, smart crates, and edge tags', async () => {
     const a = await createTrack({ title: 'A', artist: 'x', tags: [] })
     const b = await createTrack({ title: 'B', artist: 'y', tags: [] })
     await addAnnotation({ trackId: a, timestampSec: 10, type: 'cue_in', text: 'in' })
     await addEdge({ fromTrackId: a, toTrackId: b, technique: 'swap', rating: 5, tags: ['?', 'bass swap'] })
+    const fld = await createFolder('Warmups', 'playlist')
     const pl = await createPlaylist('PL')
-    await updatePlaylist(pl, { trackIds: [a, b] })
+    await updatePlaylist(pl, { trackIds: [a, b], folderId: fld })
     const st = await createSet('SET')
     await updateSet(st, { trackIds: [a, b] })
+    const cr = await createSmartCrate('Peak 124+', { bpmMin: 124, includeTags: ['peak'], tagMode: 'all' })
 
     const backup = await gatherBackup()
     expect(backup.sets).toHaveLength(1)
+    expect(backup.smartCrates).toHaveLength(1)
+    expect(backup.folders).toHaveLength(1)
     expect(backup.edges[0].tags).toEqual(['?', 'bass swap'])
 
     await clearAll()
@@ -50,6 +58,12 @@ describe('backup', () => {
     expect((await db.sets.get(st))?.trackIds).toEqual([a, b])
     expect((await db.playlists.get(pl))?.trackIds).toEqual([a, b])
     expect((await db.edges.toArray())[0].tags).toEqual(['?', 'bass swap'])
+    // smart crates must survive too, with their query intact
+    expect(await db.smartCrates.count()).toBe(1)
+    expect((await db.smartCrates.get(cr))?.query).toEqual({ bpmMin: 124, includeTags: ['peak'], tagMode: 'all' })
+    // folders survive, and the playlist's folder membership rides along on the item
+    expect(await db.folders.count()).toBe(1)
+    expect((await db.playlists.get(pl))?.folderId).toBe(fld)
   })
 
   it('accepts a v1 backup (no sets) and backfills missing edge tags', async () => {
