@@ -72,7 +72,16 @@ export function downloadSnapshot(snap: Snapshot): void {
 export function snapshotSummary(snap: Snapshot): string {
   try {
     const o = JSON.parse(snap.json) as Partial<BackupData>
-    return `${o.tracks?.length ?? 0} tracks · ${o.edges?.length ?? 0} transitions · ${o.sets?.length ?? 0} sets`
+    const parts = [
+      `${o.tracks?.length ?? 0} tracks`,
+      `${o.edges?.length ?? 0} transitions`,
+      `${o.sets?.length ?? 0} sets`,
+    ]
+    // Only mention the newer tables when present, so two recovery points that
+    // differ only in crates/folders are distinguishable in the list.
+    if (o.smartCrates?.length) parts.push(`${o.smartCrates.length} crates`)
+    if (o.folders?.length) parts.push(`${o.folders.length} folders`)
+    return parts.join(' · ')
   } catch {
     return ''
   }

@@ -61,6 +61,17 @@ export interface Playlist {
   id: string
   name: string
   trackIds: string[]
+  folderId?: string // undefined = top-level (ungrouped)
+  createdAt: number
+}
+
+// Groups playlists OR sets in the sidebar. `kind` discriminates which section it
+// belongs to. Membership lives on the item (Playlist/TrackSet.folderId), not
+// here — so there's no child list to keep in sync. Portable (backed up).
+export interface Folder {
+  id: string
+  name: string
+  kind: 'playlist' | 'set'
   createdAt: number
 }
 
@@ -87,5 +98,46 @@ export interface TrackSet {
   id: string
   name: string
   trackIds: string[]
+  folderId?: string // undefined = top-level (ungrouped)
+  createdAt: number
+}
+
+// ---- FilterQuery: a serializable, declarative filter over the track library. ----
+// Used live by the CollectionView filter bar AND stored verbatim in a SmartCrate.
+// PRODUCT NOTE: this is a pure FILTER (show the tracks I pick), never a
+// recommender. Membership/range only — no Camelot-distance / "what mixes next".
+export type TagMode = 'all' | 'any' | 'none' // AND / OR / NOT, applied to includeTags
+
+export interface FilterQuery {
+  text?: string // free-text over title/artist/genre/tags
+  includeTags?: string[] // combined per tagMode
+  excludeTags?: string[] // always NOT (a track with any of these is excluded)
+  tagMode?: TagMode // default 'all'
+  bpmMin?: number // inclusive; undefined = unbounded
+  bpmMax?: number
+  energyMin?: number // 1-10
+  energyMax?: number
+  durationMin?: number // seconds
+  durationMax?: number
+  keys?: string[] // membership (NOT harmonic matching)
+  genres?: string[] // membership
+  artists?: string[] // membership
+}
+
+// Device-local track-table column preferences. Persisted in the `meta` table
+// (key 'ui.trackColumns'); NOT part of the portable backup. Unknown ids are
+// ignored on read so the layout survives columns being added/removed in code.
+export interface ColumnConfig {
+  order: string[] // column ids in display order
+  hidden: string[] // column ids to hide
+}
+
+// A saved FilterQuery, shown in the sidebar and re-evaluated live against the
+// library (so its match count stays current). Portable, user-authored data —
+// included in the JSON backup.
+export interface SmartCrate {
+  id: string
+  name: string
+  query: FilterQuery
   createdAt: number
 }

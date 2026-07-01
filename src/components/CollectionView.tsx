@@ -1,18 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, updatePlaylist, deletePlaylist, updateSet, deleteSet } from '../db/db'
-import type { Track } from '../types'
+import {
+  db,
+  updatePlaylist,
+  deletePlaylist,
+  updateSet,
+  deleteSet,
+  metaGet,
+  metaSet,
+  createSmartCrate,
+  updateSmartCrate,
+  deleteSmartCrate,
+} from '../db/db'
+import type { Track, FilterQuery, ColumnConfig } from '../types'
 import { useUi } from '../store/ui'
-import type { ViewMode } from '../store/ui'
+import type { ViewMode, Collection } from '../store/ui'
+import { emptyQuery, isQueryActive, filterTracks, canonicalQuery } from '../lib/filter'
 import { TrackTable } from './library/TrackTable'
 import { TrackGrid } from './library/TrackGrid'
 import { OrderedList } from './library/OrderedList'
+import { FilterBar } from './library/FilterBar'
+import { ColumnsMenu } from './library/ColumnsMenu'
 import { LinearView } from './library/LinearView'
 import { GraphView } from './graph/GraphView'
 import { TransitionsList } from './TransitionsList'
 import { SpotifyPage } from './spotify/SpotifyPage'
 import { AddTrackModal } from './library/AddTrackModal'
-import { btn, inputCls } from './common/widgets'
+import { btn, inputCls, Modal } from './common/widgets'
 
 const VIEW_MODES: { mode: ViewMode; label: string }[] = [
   { mode: 'list', label: 'List' },
@@ -20,6 +34,17 @@ const VIEW_MODES: { mode: ViewMode; label: string }[] = [
   { mode: 'grid', label: 'Grid' },
   { mode: 'graph', label: 'Graph' },
 ]
+
+// A stable identity for a collection — used to re-seed the filter only when the
+// *target* changes, not when unrelated live-query data refreshes.
+function collectionSig(c: Collection): string {
+  if (c.kind === 'crate' || c.kind === 'playlist' || c.kind === 'set') return `${c.kind}:${c.id}`
+  if (c.kind === 'artist' || c.kind === 'genre' || c.kind === 'tag') return `${c.kind}:${c.value}`
+  return c.kind
+}
+
+const slotPrimary = 'rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-white transition hover:bg-accent2'
+const slotGhost = 'rounded-md border border-edge bg-panel2 px-2 py-0.5 text-xs text-zinc-200 transition hover:bg-edge'
 
 export function CollectionView() {
   const collection = useUi((s) => s.collection)
@@ -30,10 +55,44 @@ export function CollectionView() {
   const setSearch = useUi((s) => s.setSearch)
   const selectTrack = useUi((s) => s.selectTrack)
   const [adding, setAdding] = useState(false)
+  const crates = useLiveQuery(() => db.smartCrates.toArray(), [])
 
-  // Per-view tag filter (AND semantics). Resets when you switch collections.
-  const [tagFilter, setTagFilter] = useState<string[]>([])
-  useEffect(() => setTagFilter([]), [collection])
+  // Per-view structured filter. Resets when you switch collections; a smart
+  // crate seeds it from its saved query. We re-seed only when the target
+  // collection changes (not when `crates` refreshes), so live edits aren't lost.
+  const [query, setQuery] = useState<FilterQuery>(emptyQuery())
+  const seededFor = useRef<string>('')
+  useEffect(() => {
+    const sig = collectionSig(collection)
+    if (seededFor.current === sig) return
+    if (collection.kind === 'crate') {
+      const crate = crates?.find((c) => c.id === collection.id)
+      if (!crate) return // crates not loaded yet — re-run when they arrive
+      setQuery(crate.query)
+    } else {
+      setQuery(emptyQuery())
+    }
+    seededFor.current = sig
+  }, [collection, crates])
+
+  const openCrate = collection.kind === 'crate' ? crates?.find((c) => c.id === collection.id) : undefined
+
+  // Save-as-crate naming modal.
+  const [savingCrate, setSavingCrate] = useState(false)
+  const [crateName, setCrateName] = useState('')
+
+  // Device-local track-table column layout (persisted in `meta`, not exported).
+  const [columnConfig, setColumnConfig] = useState<ColumnConfig | undefined>(undefined)
+  const [columnsOpen, setColumnsOpen] = useState(false)
+  useEffect(() => {
+    void metaGet<ColumnConfig>('ui.trackColumns').then((c) => {
+      if (c) setColumnConfig(c)
+    })
+  }, [])
+  const updateColumns = (c: ColumnConfig) => {
+    setColumnConfig(c)
+    void metaSet('ui.trackColumns', c)
+  }
 
   const tracks = useLiveQuery(() => db.tracks.toArray(), [])
   const annotations = useLiveQuery(() => db.annotations.toArray(), [])
@@ -75,19 +134,17 @@ export function CollectionView() {
   } else if (collection.kind === 'tag') {
     title = `#${collection.value}`
     listTracks = (tracks ?? []).filter((t) => t.tags.includes(collection.value))
+  } else if (collection.kind === 'crate') {
+    title = openCrate?.name ?? 'Smart crate'
+    listTracks = tracks ?? [] // filtered below by the seeded query
   } else if (ordered && record) {
     title = record.name
     orderedIds = record.trackIds
     listTracks = record.trackIds.map((id) => trackById.get(id)).filter((t): t is Track => !!t)
   }
 
-  const availableTags = useMemo(
-    () => [...new Set(listTracks.flatMap((t) => t.tags))].sort(),
-    [listTracks],
-  )
-  const filterActive = tagFilter.length > 0
-  const matchesTags = (t: Track) => tagFilter.every((tag) => t.tags.includes(tag))
-  const tagged = filterActive ? listTracks.filter(matchesTags) : listTracks
+  const filterActive = isQueryActive(query)
+  const tagged = filterTracks(listTracks, query)
 
   const q = search.trim().toLowerCase()
   const matchesSearch = (t: Track) =>
@@ -100,7 +157,7 @@ export function CollectionView() {
   // List/Grid display: search applies only to unordered collections.
   const displayTracks = ordered ? tagged : tagged.filter(matchesSearch)
   const orderedListIds = filterActive ? tagged.map((t) => t.id) : orderedIds
-  // Graph scope = the collection narrowed by the tag filter (not search).
+  // Graph scope = the collection narrowed by the filter (not search).
   const scopeIds = collection.kind === 'all' && !filterActive ? undefined : tagged.map((t) => t.id)
 
   const availableForAdd = useMemo(
@@ -118,14 +175,59 @@ export function CollectionView() {
   const rename = (name: string) => {
     if (collection.kind === 'playlist') void updatePlaylist(collection.id, { name })
     else if (collection.kind === 'set') void updateSet(collection.id, { name })
+    else if (collection.kind === 'crate') void updateSmartCrate(collection.id, { name })
   }
   const removeCollection = () => {
+    if (collection.kind === 'crate') {
+      if (!confirm(`Delete smart crate "${openCrate?.name ?? ''}"?`)) return
+      void deleteSmartCrate(collection.id)
+      setCollection({ kind: 'all' })
+      return
+    }
     if (!record) return
     if (!confirm(`Delete ${isSet ? 'set' : 'playlist'} "${record.name}"?`)) return
     if (collection.kind === 'playlist') void deletePlaylist(collection.id)
     else if (collection.kind === 'set') void deleteSet(collection.id)
     setCollection({ kind: 'all' })
   }
+
+  // Smart-crate save/update affordances.
+  const crateDirty = openCrate ? canonicalQuery(query) !== canonicalQuery(openCrate.query) : false
+  const editableTitle = ordered || collection.kind === 'crate'
+  const openSaveCrate = () => {
+    setCrateName('')
+    setSavingCrate(true)
+  }
+  const saveAsCrate = async () => {
+    const name = crateName.trim()
+    if (!name) return
+    const id = await createSmartCrate(name, query)
+    setSavingCrate(false)
+    setCollection({ kind: 'crate', id })
+  }
+  const updateOpenCrate = () => {
+    if (openCrate) void updateSmartCrate(openCrate.id, { query })
+  }
+
+  const filterRightSlot =
+    collection.kind === 'crate' ? (
+      crateDirty ? (
+        <>
+          <button className={slotPrimary} onClick={updateOpenCrate}>
+            Update crate
+          </button>
+          <button className={slotGhost} onClick={openSaveCrate}>
+            Save as new
+          </button>
+        </>
+      ) : (
+        <span className="text-xs text-zinc-500">Saved&nbsp;✓</span>
+      )
+    ) : filterActive ? (
+      <button className={slotGhost} onClick={openSaveCrate}>
+        Save as crate
+      </button>
+    ) : null
 
   const missingRecord = ordered && !record
 
@@ -136,10 +238,10 @@ export function CollectionView() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-edge px-4 py-3">
-        {ordered ? (
+        {editableTitle ? (
           <input
             className={`${inputCls} max-w-xs text-base font-semibold`}
-            value={record?.name ?? ''}
+            value={(ordered ? record?.name : openCrate?.name) ?? ''}
             onChange={(e) => rename(e.target.value)}
           />
         ) : (
@@ -172,7 +274,17 @@ export function CollectionView() {
               </button>
             ))}
           </div>
-          {ordered && (
+          {viewMode === 'list' && !ordered && (
+            <button
+              className={btn.ghost}
+              onClick={() => setColumnsOpen(true)}
+              title="Columns"
+              aria-label="Columns"
+            >
+              ⚙
+            </button>
+          )}
+          {(ordered || collection.kind === 'crate') && (
             <button className={btn.ghost} onClick={removeCollection}>
               Delete
             </button>
@@ -183,29 +295,8 @@ export function CollectionView() {
         </div>
       </div>
 
-      {availableTags.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-edge px-4 py-2">
-          <span className="mr-1 text-[11px] uppercase tracking-wide text-zinc-500">Filter</span>
-          {availableTags.map((tag) => {
-            const on = tagFilter.includes(tag)
-            return (
-              <button
-                key={tag}
-                onClick={() => setTagFilter(on ? tagFilter.filter((x) => x !== tag) : [...tagFilter, tag])}
-                className={`rounded-full px-2 py-0.5 text-xs transition ${
-                  on ? 'bg-accent text-white' : 'bg-panel2 text-zinc-300 hover:bg-edge'
-                }`}
-              >
-                #{tag}
-              </button>
-            )
-          })}
-          {filterActive && (
-            <button onClick={() => setTagFilter([])} className="ml-1 text-xs text-zinc-500 hover:text-zinc-200">
-              clear
-            </button>
-          )}
-        </div>
+      {listTracks.length > 0 && (
+        <FilterBar query={query} onChange={setQuery} tracks={listTracks} rightSlot={filterRightSlot} />
       )}
 
       <div className="min-h-0 flex-1">
@@ -232,7 +323,14 @@ export function CollectionView() {
               ) : displayTracks.length === 0 ? (
                 <EmptyMessage />
               ) : (
-                <TrackTable tracks={displayTracks} annCount={annCount} edgeCount={edgeCount} onRowClick={selectTrack} />
+                <TrackTable
+                  tracks={displayTracks}
+                  annCount={annCount}
+                  edgeCount={edgeCount}
+                  onRowClick={selectTrack}
+                  editable
+                  columnConfig={columnConfig}
+                />
               ))}
             {viewMode === 'grid' &&
               (displayTracks.length === 0 ? (
@@ -248,6 +346,35 @@ export function CollectionView() {
       </div>
 
       <AddTrackModal open={adding} onClose={() => setAdding(false)} />
+      <ColumnsMenu
+        open={columnsOpen}
+        onClose={() => setColumnsOpen(false)}
+        config={columnConfig ?? { order: [], hidden: [] }}
+        onChange={updateColumns}
+      />
+      <Modal open={savingCrate} onClose={() => setSavingCrate(false)} title="Save smart crate" maxW="max-w-sm">
+        <div className="space-y-3">
+          <input
+            className={inputCls}
+            autoFocus
+            placeholder="Crate name (e.g. Peak-time house)"
+            value={crateName}
+            onChange={(e) => setCrateName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void saveAsCrate()
+            }}
+          />
+          <p className="text-xs text-zinc-500">Saves the current filter as a crate in the sidebar.</p>
+          <div className="flex justify-end gap-2">
+            <button className={btn.ghost} onClick={() => setSavingCrate(false)}>
+              Cancel
+            </button>
+            <button className={btn.primary} onClick={() => void saveAsCrate()} disabled={!crateName.trim()}>
+              Save
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

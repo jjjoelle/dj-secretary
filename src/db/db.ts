@@ -1,6 +1,6 @@
 import Dexie from 'dexie'
 import type { Table } from 'dexie'
-import type { Track, Annotation, Edge, Playlist, TrackSet, Snapshot, Meta } from '../types'
+import type { Track, Annotation, Edge, Playlist, TrackSet, Snapshot, Meta, SmartCrate, Folder, FilterQuery } from '../types'
 
 // Local-first storage. Everything lives in the browser (IndexedDB); no backend.
 export class DjDb extends Dexie {
@@ -11,6 +11,8 @@ export class DjDb extends Dexie {
   sets!: Table<TrackSet, string>
   snapshots!: Table<Snapshot, string>
   meta!: Table<Meta, string>
+  smartCrates!: Table<SmartCrate, string>
+  folders!: Table<Folder, string>
 
   constructor() {
     super('dj-secretary')
@@ -37,6 +39,11 @@ export class DjDb extends Dexie {
       })
     // v4 adds a small key/value store (auto-backup file handle, etc.).
     this.version(4).stores({ meta: 'key' })
+    // v5 adds smart crates (saved filters). New empty table ⇒ no upgrade().
+    this.version(5).stores({ smartCrates: 'id, name, createdAt' })
+    // v6 adds folders (sidebar grouping for playlists/sets). `folderId` on
+    // playlists/sets is optional ⇒ no upgrade/backfill needed.
+    this.version(6).stores({ folders: 'id, name, kind, createdAt' })
   }
 }
 
@@ -56,7 +63,7 @@ export function onDbChange(fn: DbChangeListener): () => void {
 function emitDbChange(): void {
   dbChangeListeners.forEach((fn) => fn())
 }
-;[db.tracks, db.annotations, db.edges, db.playlists, db.sets].forEach((table) => {
+;[db.tracks, db.annotations, db.edges, db.playlists, db.sets, db.smartCrates, db.folders].forEach((table) => {
   const t = table as unknown as { hook: (ev: 'creating' | 'updating' | 'deleting', fn: () => void) => void }
   t.hook('creating', emitDbChange)
   t.hook('updating', emitDbChange)
@@ -192,6 +199,49 @@ export async function updateSet(id: string, changes: Partial<TrackSet>): Promise
 
 export async function deleteSet(id: string): Promise<void> {
   await db.sets.delete(id)
+}
+
+// ---- Smart crates (saved filters) ----
+
+export async function createSmartCrate(name: string, query: FilterQuery): Promise<string> {
+  const id = newId()
+  await db.smartCrates.add({ id, name, query, createdAt: Date.now() })
+  return id
+}
+
+export async function updateSmartCrate(id: string, changes: Partial<SmartCrate>): Promise<void> {
+  await db.smartCrates.update(id, changes)
+}
+
+export async function deleteSmartCrate(id: string): Promise<void> {
+  await db.smartCrates.delete(id)
+}
+
+// ---- Folders (sidebar grouping for playlists/sets) ----
+
+export async function createFolder(name: string, kind: 'playlist' | 'set'): Promise<string> {
+  const id = newId()
+  await db.folders.add({ id, name, kind, createdAt: Date.now() })
+  return id
+}
+
+export async function updateFolder(id: string, changes: Partial<Folder>): Promise<void> {
+  await db.folders.update(id, changes)
+}
+
+// Re-parent children to the top level (clear their folderId), then delete the
+// folder — all in one rw txn. `folderId` isn't indexed, so filter in memory
+// rather than using .where('folderId') (which would throw).
+export async function deleteFolder(id: string): Promise<void> {
+  await db.transaction('rw', db.folders, db.playlists, db.sets, async () => {
+    for (const pl of (await db.playlists.toArray()).filter((p) => p.folderId === id)) {
+      await db.playlists.update(pl.id, { folderId: undefined })
+    }
+    for (const s of (await db.sets.toArray()).filter((s) => s.folderId === id)) {
+      await db.sets.update(s.id, { folderId: undefined })
+    }
+    await db.folders.delete(id)
+  })
 }
 
 // ---- Meta (key/value app settings) ----
