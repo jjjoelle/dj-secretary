@@ -204,6 +204,7 @@ export function Sidebar() {
 }
 
 function FolderedList({
+  kind,
   items,
   folders,
   collapse,
@@ -230,6 +231,27 @@ function FolderedList({
   // Items with no folder — or pointing at a deleted/other-kind folder — are top-level.
   const ungrouped = items.filter((it) => !it.folderId || !folderIds.has(it.folderId))
 
+  // Native HTML5 drag-to-folder. Payload encodes kind so a set can't land in a
+  // playlist folder. `endDrag` (fired on the source's dragEnd, even on an invalid
+  // drop) is the safety net that always clears the highlight + ungroup zone.
+  const DND_TYPE = 'application/x-dj-item'
+  const [dragging, setDragging] = useState(false)
+  const [dragOverId, setDragOverId] = useState<string | null>(null) // folder id or '__ungroup__'
+  const overType = (e: React.DragEvent) => e.dataTransfer.types.includes(DND_TYPE)
+  const beginDrag = (e: React.DragEvent, id: string) => {
+    e.dataTransfer.setData(DND_TYPE, `${kind}:${id}`)
+    e.dataTransfer.effectAllowed = 'move'
+    setDragging(true)
+  }
+  const endDrag = () => {
+    setDragging(false)
+    setDragOverId(null)
+  }
+  const parseDrag = (e: React.DragEvent): string | null => {
+    const [k, id] = (e.dataTransfer.getData(DND_TYPE) || '').split(':')
+    return k === kind && id ? id : null
+  }
+
   return (
     <>
       {folders.map((f) => {
@@ -243,6 +265,20 @@ function FolderedList({
             onToggle={() => onToggleCollapse(f.id)}
             onRename={(name) => onRenameFolder(f.id, name)}
             onDelete={() => onDeleteFolder(f.id)}
+            dropActive={dragOverId === f.id}
+            onDragOver={(e) => {
+              if (!overType(e)) return
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              setDragOverId(f.id)
+            }}
+            onDragLeave={() => setDragOverId((cur) => (cur === f.id ? null : cur))}
+            onDrop={(e) => {
+              e.preventDefault()
+              const id = parseDrag(e)
+              if (id) onMoveItem(id, f.id)
+              endDrag()
+            }}
           >
             {children.map((it) => (
               <ItemRow
@@ -253,12 +289,36 @@ function FolderedList({
                 onOpen={() => onOpen(it.id)}
                 folders={folders}
                 onMove={(fid) => onMoveItem(it.id, fid)}
+                onDragStart={(e) => beginDrag(e, it.id)}
+                onDragEnd={endDrag}
               />
             ))}
             {children.length === 0 && <div className="px-2 py-1 pl-8 text-[11px] text-zinc-600">empty</div>}
           </FolderRow>
         )
       })}
+      {dragging && (
+        <div
+          onDragOver={(e) => {
+            if (!overType(e)) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            setDragOverId('__ungroup__')
+          }}
+          onDragLeave={() => setDragOverId((cur) => (cur === '__ungroup__' ? null : cur))}
+          onDrop={(e) => {
+            e.preventDefault()
+            const id = parseDrag(e)
+            if (id) onMoveItem(id, undefined)
+            endDrag()
+          }}
+          className={`mx-1 my-1 rounded border border-dashed px-2 py-1.5 text-center text-[11px] transition ${
+            dragOverId === '__ungroup__' ? 'border-accent bg-accent/15 text-violet-200' : 'border-edge text-zinc-500'
+          }`}
+        >
+          Drop here to remove from folder
+        </div>
+      )}
       {ungrouped.map((it) => (
         <ItemRow
           key={it.id}
@@ -267,6 +327,8 @@ function FolderedList({
           onOpen={() => onOpen(it.id)}
           folders={folders}
           onMove={(fid) => onMoveItem(it.id, fid)}
+          onDragStart={(e) => beginDrag(e, it.id)}
+          onDragEnd={endDrag}
         />
       ))}
     </>
@@ -280,6 +342,10 @@ function FolderRow({
   onToggle,
   onRename,
   onDelete,
+  dropActive,
+  onDragOver,
+  onDragLeave,
+  onDrop,
   children,
 }: {
   folder: Folder
@@ -288,6 +354,10 @@ function FolderRow({
   onToggle: () => void
   onRename: (name: string) => void
   onDelete: () => void
+  dropActive: boolean
+  onDragOver: (e: React.DragEvent) => void
+  onDragLeave: () => void
+  onDrop: (e: React.DragEvent) => void
   children: React.ReactNode
 }) {
   const [editing, setEditing] = useState(false)
@@ -300,7 +370,14 @@ function FolderRow({
 
   return (
     <div className="group/folder">
-      <div className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-panel2">
+      <div
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        className={`flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-panel2 ${
+          dropActive ? 'bg-accent/20 ring-1 ring-accent' : ''
+        }`}
+      >
         <button onClick={onToggle} className="text-[10px]" aria-label={open ? 'Collapse' : 'Expand'}>
           {open ? '▾' : '▸'}
         </button>
@@ -351,6 +428,8 @@ function ItemRow({
   onOpen,
   folders,
   onMove,
+  onDragStart,
+  onDragEnd,
 }: {
   item: FolderableItem
   active: boolean
@@ -358,10 +437,17 @@ function ItemRow({
   onOpen: () => void
   folders: Folder[]
   onMove: (folderId?: string) => void
+  onDragStart: (e: React.DragEvent) => void
+  onDragEnd: () => void
 }) {
   const [menu, setMenu] = useState(false)
   return (
-    <div className="group/item relative flex items-center">
+    <div
+      className="group/item relative flex items-center"
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+    >
       <button
         onClick={onOpen}
         className={`flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition ${

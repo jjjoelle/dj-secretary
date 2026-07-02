@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Track, ColumnConfig } from '../../types'
+import type { Track, ColumnConfig, Playlist } from '../../types'
 import { formatTime, parseTime } from '../../lib/time'
 import { CAMELOT_KEYS } from '../../lib/music'
-import { TagInput } from '../common/widgets'
+import { TagInput, inputCls } from '../common/widgets'
 import { updateTrack } from '../../db/db'
+import { useUi } from '../../store/ui'
 
 export type ColumnKey =
   | 'title'
@@ -205,6 +206,11 @@ export function TrackTable({
   onRowClick,
   editable = false,
   columnConfig,
+  sortConfig,
+  onSortChange,
+  playlists = [],
+  onDeleteSelected,
+  onAddToPlaylist,
 }: {
   tracks: Track[]
   annCount: Map<string, number>
@@ -212,8 +218,22 @@ export function TrackTable({
   onRowClick: (id: string) => void
   editable?: boolean
   columnConfig?: ColumnConfig
+  sortConfig?: { key: string; dir: 1 | -1 } // persisted sort (device-local); undefined = internal default
+  onSortChange?: (s: { key: string; dir: 1 | -1 }) => void
+  playlists?: Playlist[] // for the bulk "add to playlist" menu
+  onDeleteSelected?: (ids: string[]) => void | Promise<void>
+  onAddToPlaylist?: (playlistId: string, ids: string[]) => void | Promise<void>
 }) {
-  const [sort, setSort] = useState<{ key: ColumnKey; dir: 1 | -1 }>({ key: 'title', dir: 1 })
+  // When a persisted sortConfig is supplied it's the source of truth; otherwise
+  // fall back to internal state (default: Title ascending). An unknown saved key
+  // (e.g. a renamed column) falls back too.
+  const [internalSort, setInternalSort] = useState<{ key: ColumnKey; dir: 1 | -1 }>({ key: 'title', dir: 1 })
+  const sort = useMemo<{ key: ColumnKey; dir: 1 | -1 }>(() => {
+    if (sortConfig && COLUMNS.some((c) => c.key === sortConfig.key)) {
+      return { key: sortConfig.key as ColumnKey, dir: sortConfig.dir === -1 ? -1 : 1 }
+    }
+    return internalSort
+  }, [sortConfig, internalSort])
 
   // Visible columns in saved order (Title pinned first, hidden ones dropped).
   const cols = useMemo(() => {
@@ -227,6 +247,13 @@ export function TrackTable({
   // reset when the live query re-runs after another track changes.
   const [editing, setEditing] = useState<{ id: string; key: ColumnKey } | null>(null)
   const [draft, setDraft] = useState('')
+  // Bulk-selection state (ephemeral; not persisted). Keyed by track id.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [tagOp, setTagOp] = useState<null | 'add' | 'remove'>(null)
+  const [tagDraft, setTagDraft] = useState('')
+  const [plMenuOpen, setPlMenuOpen] = useState(false)
+  const [activeRow, setActiveRow] = useState(-1) // keyboard-highlighted row index into `sorted`; -1 = none
+  const bodyRef = useRef<HTMLTableSectionElement>(null)
   const ctx = useMemo<ColumnCtx>(() => ({ annCount, edgeCount }), [annCount, edgeCount])
 
   // Distinguish a single click (open inspector) from a double click (edit a cell)
@@ -264,8 +291,32 @@ export function TrackTable({
     })
   }, [tracks, sort, ctx])
 
-  const toggle = (key: ColumnKey) =>
-    setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 }))
+  // Keep the selection pruned to still-visible rows (runs whenever the visible
+  // set changes), so a hidden-but-selected track can't be silently bulk-deleted.
+  // Returns the same Set reference when nothing changed, so React bails out of
+  // the follow-up render — cheap even though it runs often.
+  const visibleIds = useMemo(() => new Set(tracks.map((t) => t.id)), [tracks])
+  useEffect(() => {
+    setSelected((sel) => {
+      if (sel.size === 0) return sel
+      let changed = false
+      const next = new Set<string>()
+      for (const id of sel) {
+        if (visibleIds.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : sel
+    })
+  }, [visibleIds])
+
+  const toggle = (key: ColumnKey) => {
+    const next: { key: ColumnKey; dir: 1 | -1 } = {
+      key,
+      dir: sort.key === key ? ((sort.dir * -1) as 1 | -1) : 1,
+    }
+    setInternalSort(next)
+    onSortChange?.(next)
+  }
 
   const startEdit = (t: Track, c: Column) => {
     cancelRowClick()
@@ -280,10 +331,188 @@ export function TrackTable({
     setEditing(null)
   }
 
+  // ---- bulk selection (over the visible, sorted rows) ----
+  const selCount = useMemo(() => sorted.reduce((n, t) => (selected.has(t.id) ? n + 1 : n), 0), [sorted, selected])
+  const toggleSel = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
+  const selectAll = () => setSelected(new Set(sorted.map((t) => t.id))) // all VISIBLE rows only
+  const clearSel = () => setSelected(new Set())
+  const selectedIds = () => sorted.filter((t) => selected.has(t.id)).map((t) => t.id)
+  const applyTag = () => {
+    const tag = tagDraft.trim()
+    if (tag) {
+      for (const t of sorted) {
+        if (!selected.has(t.id)) continue
+        if (tagOp === 'add' && !t.tags.includes(tag)) void updateTrack(t.id, { tags: [...t.tags, tag] })
+        if (tagOp === 'remove' && t.tags.includes(tag)) void updateTrack(t.id, { tags: t.tags.filter((x) => x !== tag) })
+      }
+    }
+    setTagDraft('')
+    setTagOp(null)
+  }
+  const doDelete = () => {
+    const ids = selectedIds()
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} track${ids.length > 1 ? 's' : ''}? This also removes their notes, transitions, and playlist entries.`))
+      return
+    void onDeleteSelected?.(ids)
+    clearSel()
+  }
+  const doAddToPlaylist = (playlistId: string) => {
+    void onAddToPlaylist?.(playlistId, selectedIds())
+    setPlMenuOpen(false)
+    clearSel()
+  }
+
+  // ---- keyboard row navigation (Up/Down move a highlight, Enter opens it) ----
+  // Read live values through refs so the window listener attaches once.
+  const activeRef = useRef(activeRow)
+  const sortedRef = useRef(sorted)
+  const editingRef = useRef(editing)
+  useEffect(() => {
+    activeRef.current = activeRow
+  }, [activeRow])
+  useEffect(() => {
+    sortedRef.current = sorted
+  }, [sorted])
+  useEffect(() => {
+    editingRef.current = editing
+  }, [editing])
+  // Reset the highlight when the row set changes identity (collection/filter/sort/edit).
+  useEffect(() => setActiveRow(-1), [tracks, sort])
+  useEffect(() => {
+    if (activeRow < 0) return
+    bodyRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView({ block: 'nearest' })
+  }, [activeRow])
+  useEffect(() => {
+    if (!editable) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return
+      if (useUi.getState().paletteOpen) return // never fight the palette
+      const el = document.activeElement as HTMLElement | null
+      const tag = el?.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || el?.isContentEditable) return // never fight typing
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (editingRef.current) return // a cell is mid-edit
+      if (e.key === 'Enter') {
+        const i = activeRef.current
+        if (i >= 0 && i < sortedRef.current.length) {
+          e.preventDefault()
+          onRowClick(sortedRef.current[i].id)
+        }
+        return
+      }
+      e.preventDefault()
+      setActiveRow((a) => {
+        const n = sortedRef.current.length
+        if (n === 0) return -1
+        if (a < 0) return e.key === 'ArrowDown' ? 0 : n - 1
+        return e.key === 'ArrowDown' ? Math.min(a + 1, n - 1) : Math.max(a - 1, 0)
+      })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [editable, onRowClick])
+
   return (
-    <table className="w-full border-collapse text-sm">
+    <div>
+      {editable && sorted.length > 0 && (
+        <div className="mb-3 flex min-h-[2rem] flex-wrap items-center gap-2">
+          {selCount > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-edge bg-panel2 px-2.5 py-1">
+              <span className="text-xs text-zinc-300">{selCount} selected</span>
+              {tagOp ? (
+                <span className="flex items-center gap-1">
+                  <input
+                    className={`${inputCls} h-7 w-28 py-0`}
+                    placeholder={tagOp === 'add' ? 'tag to add' : 'tag to remove'}
+                    value={tagDraft}
+                    onChange={(e) => setTagDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') applyTag()
+                      if (e.key === 'Escape') {
+                        setTagDraft('')
+                        setTagOp(null)
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <button className="text-xs text-accent hover:underline" onClick={applyTag}>
+                    apply
+                  </button>
+                </span>
+              ) : (
+                <>
+                  <button className="text-xs text-zinc-300 hover:text-white" onClick={() => setTagOp('add')}>
+                    + tag
+                  </button>
+                  <button className="text-xs text-zinc-300 hover:text-white" onClick={() => setTagOp('remove')}>
+                    − tag
+                  </button>
+                </>
+              )}
+              <div className="relative">
+                <button className="text-xs text-zinc-300 hover:text-white" onClick={() => setPlMenuOpen((o) => !o)}>
+                  Add to playlist ▾
+                </button>
+                {plMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setPlMenuOpen(false)} />
+                    <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-48 overflow-y-auto rounded-md border border-edge bg-panel shadow-xl">
+                      {playlists.length === 0 ? (
+                        <div className="px-3 py-2 text-xs text-zinc-500">No playlists yet.</div>
+                      ) : (
+                        playlists.map((p) => (
+                          <button
+                            key={p.id}
+                            onClick={() => doAddToPlaylist(p.id)}
+                            className="block w-full truncate px-3 py-1.5 text-left text-xs text-zinc-200 hover:bg-panel2"
+                          >
+                            {p.name}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              <button className="text-xs text-zinc-300 hover:text-rose-400" onClick={doDelete}>
+                Delete
+              </button>
+              <button className="text-xs text-zinc-500 hover:text-zinc-200" onClick={clearSel}>
+                clear
+              </button>
+            </div>
+          ) : (
+            <button className="text-xs text-zinc-400 hover:text-zinc-100" onClick={selectAll}>
+              Select all
+            </button>
+          )}
+        </div>
+      )}
+
+      <table className="w-full border-collapse text-sm">
       <thead className="sticky top-0 z-10 bg-ink">
         <tr className="border-b border-edge text-xs text-zinc-500">
+          {editable && (
+            <th className="w-8 px-2 py-2">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-violet-600"
+                aria-label="Select all"
+                checked={sorted.length > 0 && selCount === sorted.length}
+                ref={(el) => {
+                  if (el) el.indeterminate = selCount > 0 && selCount < sorted.length
+                }}
+                onChange={(e) => (e.target.checked ? selectAll() : clearSel())}
+              />
+            </th>
+          )}
           {cols.map((c) =>
             c.sortable === false ? (
               <th
@@ -307,13 +536,30 @@ export function TrackTable({
           )}
         </tr>
       </thead>
-      <tbody>
-        {sorted.map((t) => (
+      <tbody ref={bodyRef}>
+        {sorted.map((t, i) => (
           <tr
             key={t.id}
+            data-active={i === activeRow}
             onClick={() => onRow(t.id)}
-            className="cursor-pointer border-b border-edge/50 hover:bg-panel2"
+            className={`group cursor-pointer border-b border-edge/50 ${
+              selected.has(t.id) ? 'bg-accent/10 hover:bg-accent/15' : 'hover:bg-panel2'
+            } ${i === activeRow ? 'ring-1 ring-inset ring-accent/50' : ''}`}
           >
+            {editable && (
+              <td className="w-8 px-2 py-2" onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(t.id)}
+                  onChange={() => toggleSel(t.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  className={`h-3.5 w-3.5 accent-violet-600 transition-opacity ${
+                    selected.has(t.id) || selCount > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                  }`}
+                  aria-label="Select track"
+                />
+              </td>
+            )}
             {cols.map((c) => {
               const isEditing = editable && editing?.id === t.id && editing.key === c.key
               const canEdit = editable && (!!c.edit || !!c.editTags)
@@ -362,7 +608,8 @@ export function TrackTable({
           </tr>
         ))}
       </tbody>
-    </table>
+      </table>
+    </div>
   )
 }
 

@@ -36,6 +36,7 @@ interface UiState {
   focusTrackId: string | null // centered node in graph focus mode
   search: string
   spotifyConnected: boolean
+  paletteOpen: boolean // command palette (Cmd/Ctrl-K)
 
   backupStatus: BackupStatus
   backupFileName: string | null
@@ -48,6 +49,7 @@ interface UiState {
   setFocusTrack: (id: string | null) => void
   setSearch: (q: string) => void
   setSpotifyConnected: (connected: boolean) => void
+  setPaletteOpen: (open: boolean) => void
   setBackup: (status: BackupStatus, fileName?: string | null) => void
   bumpUnsaved: () => void
   markBackedUp: (at: number) => void
@@ -60,6 +62,7 @@ export const useUi = create<UiState>((set) => ({
   focusTrackId: null,
   search: '',
   spotifyConnected: false,
+  paletteOpen: false,
 
   backupStatus: 'off',
   backupFileName: null,
@@ -79,6 +82,7 @@ export const useUi = create<UiState>((set) => ({
   setFocusTrack: (id) => set({ focusTrackId: id }),
   setSearch: (q) => set({ search: q }),
   setSpotifyConnected: (connected) => set({ spotifyConnected: connected }),
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   setBackup: (backupStatus, fileName) =>
     set(fileName === undefined ? { backupStatus } : { backupStatus, backupFileName: fileName }),
   bumpUnsaved: () => set((s) => ({ unsavedChanges: s.unsavedChanges + 1 })),
