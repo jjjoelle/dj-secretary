@@ -6,6 +6,7 @@ import {
   deletePlaylist,
   updateSet,
   deleteSet,
+  deleteTrack,
   metaGet,
   metaSet,
   createSmartCrate,
@@ -54,6 +55,7 @@ export function CollectionView() {
   const search = useUi((s) => s.search)
   const setSearch = useUi((s) => s.setSearch)
   const selectTrack = useUi((s) => s.selectTrack)
+  const selectedTrackId = useUi((s) => s.selectedTrackId)
   const [adding, setAdding] = useState(false)
   const crates = useLiveQuery(() => db.smartCrates.toArray(), [])
 
@@ -94,9 +96,22 @@ export function CollectionView() {
     void metaSet('ui.trackColumns', c)
   }
 
+  // Device-local saved sort for the track table (persisted in `meta`).
+  const [sortConfig, setSortConfig] = useState<{ key: string; dir: 1 | -1 } | undefined>(undefined)
+  useEffect(() => {
+    void metaGet<{ key: string; dir: 1 | -1 }>('ui.trackSort').then((s) => {
+      if (s && typeof s.key === 'string') setSortConfig(s)
+    })
+  }, [])
+  const updateSort = (s: { key: string; dir: 1 | -1 }) => {
+    setSortConfig(s)
+    void metaSet('ui.trackSort', s)
+  }
+
   const tracks = useLiveQuery(() => db.tracks.toArray(), [])
   const annotations = useLiveQuery(() => db.annotations.toArray(), [])
   const edges = useLiveQuery(() => db.edges.toArray(), [])
+  const playlists = useLiveQuery(() => db.playlists.toArray(), []) // for bulk "add to playlist"
   const playlistId = collection.kind === 'playlist' ? collection.id : ''
   const playlist = useLiveQuery(() => db.playlists.get(playlistId), [playlistId])
   const setId = collection.kind === 'set' ? collection.id : ''
@@ -171,6 +186,20 @@ export function CollectionView() {
   const saveOrder = (ids: string[]) => {
     if (collection.kind === 'playlist') void updatePlaylist(collection.id, { trackIds: ids })
     else if (collection.kind === 'set') void updateSet(collection.id, { trackIds: ids })
+  }
+
+  // Bulk actions from the track table (selection lives in TrackTable).
+  const handleAddToPlaylist = async (playlistId: string, ids: string[]) => {
+    const pl = playlists?.find((p) => p.id === playlistId)
+    if (!pl) return
+    const merged = [...pl.trackIds, ...ids.filter((id) => !pl.trackIds.includes(id))]
+    await updatePlaylist(playlistId, { trackIds: merged })
+  }
+  const handleBulkDelete = async (ids: string[]) => {
+    // deleteTrack is a cascade + its own rw txn; run sequentially to avoid races
+    // on shared playlist/set rows.
+    for (const id of ids) await deleteTrack(id)
+    if (selectedTrackId && ids.includes(selectedTrackId)) selectTrack(null)
   }
   const rename = (name: string) => {
     if (collection.kind === 'playlist') void updatePlaylist(collection.id, { name })
@@ -341,12 +370,18 @@ export function CollectionView() {
                 <EmptyMessage />
               ) : (
                 <TrackTable
+                  key={collectionSig(collection)}
                   tracks={displayTracks}
                   annCount={annCount}
                   edgeCount={edgeCount}
                   onRowClick={selectTrack}
                   editable
                   columnConfig={columnConfig}
+                  sortConfig={sortConfig}
+                  onSortChange={updateSort}
+                  playlists={playlists ?? []}
+                  onDeleteSelected={handleBulkDelete}
+                  onAddToPlaylist={handleAddToPlaylist}
                 />
               ))}
             {viewMode === 'grid' &&

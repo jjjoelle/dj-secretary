@@ -15,6 +15,7 @@ import { Sidebar } from './components/Sidebar'
 import { CollectionView } from './components/CollectionView'
 import { TrackInspector } from './components/track/TrackInspector'
 import { BackupModal } from './components/BackupModal'
+import { CommandPalette } from './components/CommandPalette'
 
 const NUDGE_KEY = 'dj-secretary.storageNudgeDismissed'
 
@@ -22,6 +23,8 @@ function App() {
   const spotifyConnected = useUi((s) => s.spotifyConnected)
   const setSpotifyConnected = useUi((s) => s.setSpotifyConnected)
   const setCollection = useUi((s) => s.setCollection)
+  const paletteOpen = useUi((s) => s.paletteOpen)
+  const setPaletteOpen = useUi((s) => s.setPaletteOpen)
   const backupStatus = useUi((s) => s.backupStatus)
   const unsavedChanges = useUi((s) => s.unsavedChanges)
   const [backupOpen, setBackupOpen] = useState(false)
@@ -38,6 +41,21 @@ function App() {
       if (!persisted && localStorage.getItem(NUDGE_KEY) !== '1') setShowStorageNudge(true)
     })()
   }, [setSpotifyConnected])
+
+  // Cmd/Ctrl-K toggles the command palette. Read fresh state inside the handler
+  // so the effect deps stay empty (listener attached once).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault()
+        useUi.getState().setPaletteOpen(!useUi.getState().paletteOpen)
+      }
+    }
+    // Capture phase so the chord still fires even when a focused input or inline
+    // cell editor calls stopPropagation on keydown (React dispatches below window).
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
 
   const dismissNudge = () => {
     try {
@@ -89,6 +107,15 @@ function App() {
           ) : null}
 
           <button
+            className="rounded-md border border-edge bg-panel2 px-2 py-1.5 text-xs text-zinc-400 hover:bg-edge hover:text-zinc-200"
+            onClick={() => setPaletteOpen(true)}
+            title="Search / go to (⌘K)"
+            aria-label="Command palette"
+          >
+            ⌘K
+          </button>
+
+          <button
             className="rounded-md border border-edge bg-panel2 px-2.5 py-1.5 text-xs text-zinc-200 hover:bg-edge"
             onClick={() => setBackupOpen(true)}
           >
@@ -130,6 +157,7 @@ function App() {
 
       <TrackInspector />
       <BackupModal open={backupOpen} onClose={() => setBackupOpen(false)} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   )
 }
